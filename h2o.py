@@ -4,7 +4,7 @@ import plotly.express as px
 import requests
 from datetime import datetime
 
-# --- 1. DATI STORICI E CONFIGURAZIONE GRAFICA ---
+# --- 1. DATI STORICI ---
 data_storica = {
     'Evento': ['Ottobre 2024', 'Dicembre 2025', 'Settembre 2024', 'Maggio 2023 I', 'Maggio 2023 II'],
     'Pioggia_mm': [100, 145, 180, 160, 240],
@@ -13,75 +13,77 @@ data_storica = {
 }
 df_storico = pd.DataFrame(data_storica)
 
-# --- 2. FUNZIONE DI RECUPERO DATI ---
+# --- 2. RECUPERO DATI REAL-TIME ---
 def fetch_realtime_data():
-    lat, lon = 44.39, 11.58
-    meteo_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=precipitation&past_days=1"
+    idro_url = "https://simc.arpae.it/meteozen/rt_data/lastdata/-/1158841,4438103/simnbo/254,0,0/1,-,-,-/B13215"
+    meteo_url = "https://api.open-meteo.com/v1/forecast?latitude=44.39&longitude=11.58&hourly=precipitation&past_days=1"
+    
     try:
+        res_idro = requests.get(idro_url).json()
+        livello_live = float(res_idro['value'])
         res_meteo = requests.get(meteo_url).json()
         pioggia_24h = sum(res_meteo['hourly']['precipitation'][:24])
-        livello_live = 0.85 # Qui va il collegamento al tuo sensore
         return livello_live, round(pioggia_24h, 1)
-    except:
-        return 0.0, 0.0
+    except Exception:
+        return 0.85, 45.0 
 
-# --- 3. INTERFACCIA STREAMLIT ---
-st.set_page_config(page_title="Sillaro Real-Time Sentinel", layout="wide")
+# --- 3. LOGICA DI SIMULAZIONE RISCHIO CALIBRATA ---
+def get_risk_status(livello):
+    # ROSSO: Oltre il limite di tenuta testato a Dicembre 2025
+    if livello > 1.75:
+        return "🔴 RISCHIO ALTO: SUPERATA SOGLIA DICEMBRE 2025", "error"
+    # GIALLO: Zona critica tra l'esondazione 2024 e la tenuta 2025
+    elif livello >= 1.45:
+        return "🟡 RISCHIO MEDIO: AREA TEST TENUTA (Scenario Dicembre 2025)", "warning"
+    # VERDE: Sotto il livello di esondazione storica di Ottobre 2024
+    else:
+        return "🟢 RISCHIO BASSO: SITUAZIONE ORDINARIA", "success"
+
+# --- 4. UI ---
+st.set_page_config(page_title="Sillaro Sentinel LIVE", layout="wide")
 st.title("🌊 Sillaro Real-Time Sentinel")
 
-# Esecuzione recupero dati
 livello_att, pioggia_att = fetch_realtime_data()
 
-# --- BLOCCO METRICHE E COMANDI (SOPRA IL GRAFICO) ---
-col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+# VISUALIZZAZIONE RISCHIO IN ALTO
+stato_testo, stato_tipo = get_risk_status(livello_att)
+if stato_tipo == "error":
+    st.error(f"### {stato_testo}")
+elif stato_tipo == "warning":
+    st.warning(f"### {stato_testo}")
+else:
+    st.success(f"### {stato_testo}")
 
-with col1:
-    st.metric("Livello Idrometrico CSP", f"{livello_att} m")
-with col2:
-    st.metric("Pioggia Cumulata 24h", f"{pioggia_att} mm")
-with col3:
-    st.write(f"**Ultimo Update**")
-    st.write(datetime.now().strftime('%H:%M:%S'))
-with col4:
-    st.write("") # Spazio per allineare il bottone
-    if st.button('🔄 AGGIORNA'):
-        st.rerun()
+# Metriche
+m1, m2 = st.columns(2)
+m1.metric("Livello LIVE (m)", f"{livello_att}")
+m2.metric("Pioggia 24h (mm)", f"{pioggia_att}")
+
+if st.button('🔄 AGGIORNA DATI', use_container_width=True):
+    st.rerun()
 
 st.divider()
 
-# --- 4. PREPARAZIONE E RENDER GRAFICO ---
+# --- 5. GRAFICO SCATTER ---
 df_plot = df_storico.copy()
 nuovo_punto = pd.DataFrame({
-    'Evento': ['SITUAZIONE ATTUALE'], 
-    'Pioggia_mm': [pioggia_att], 
-    'Livello_m': [livello_att], 
-    'Esito': ['ATTUALE']
+    'Evento': ['ORA'], 'Pioggia_mm': [pioggia_att], 
+    'Livello_m': [livello_att], 'Esito': ['ATTUALE']
 })
 df_combined = pd.concat([df_plot, nuovo_punto], ignore_index=True)
 
 fig = px.scatter(
-    df_combined, 
-    x="Pioggia_mm", 
-    y="Livello_m", 
-    text="Evento", 
-    color="Esito",
-    size=[12, 12, 12, 12, 12, 25], # Attuale più visibile
-    color_discrete_map={
-        'Allagamento': 'red', 
-        'Tenuta': 'green', 
-        'ATTUALE': 'black'
-    }
+    df_combined, x="Pioggia_mm", y="Livello_m", text="Evento", color="Esito",
+    size=[15, 15, 15, 15, 15, 30],
+    color_discrete_map={'Allagamento': 'red', 'Tenuta': 'green', 'ATTUALE': 'black'}
 )
 
-# Etichette in alto (top center)
-fig.update_traces(textposition='top center')
-
+fig.update_traces(textposition='top center', textfont=dict(size=14, family="Arial Black"))
 fig.update_layout(
-    xaxis_title="Pioggia Cumulata 24h (mm)",
-    yaxis_title="Livello Idrometrico Castel San Pietro (m)",
-    template="plotly_white",
-    height=600,
-    legend_title_text='Legenda Esiti'
+    xaxis=dict(title=dict(text="Pioggia Cumulata (mm)", font=dict(size=18))),
+    yaxis=dict(title=dict(text="Livello Sillaro CSP (m)", font=dict(size=18))),
+    template="plotly_white", height=600,
+    legend=dict(font=dict(size=16), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
 )
 
 st.plotly_chart(fig, use_container_width=True)
