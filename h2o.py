@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import requests
 from datetime import datetime
 
-# --- 1. DATI STORICI ---
+# --- 1. DATI STORICI ORDINATI PER DATA (Dal più recente al meno recente) ---
 data_storica = {
-    'Evento': ['Ottobre 2024', 'Dicembre 2025', 'Settembre 2024', 'Maggio 2023 I', 'Maggio 2023 II'],
-    'Pioggia_mm': [100, 145, 180, 160, 240],
-    'Livello_m': [1.45, 1.75, 1.82, 1.85, 2.15],
-    'Esito': ['Allagamento', 'Tenuta', 'Allagamento', 'Allagamento', 'Allagamento']
+    'Evento': ['Dicembre 2025', 'Ottobre 2024', 'Settembre 2024', 'Maggio 2023 II', 'Maggio 2023 I'],
+    'Livello_m': [1.75, 1.45, 1.82, 2.15, 1.85],
+    'Pioggia_mm': [145, 100, 180, 240, 160],
+    'Esito': ['Tenuta', 'Allagamento', 'Allagamento', 'Allagamento', 'Allagamento']
 }
 df_storico = pd.DataFrame(data_storica)
 
@@ -17,73 +17,109 @@ df_storico = pd.DataFrame(data_storica)
 def fetch_realtime_data():
     idro_url = "https://simc.arpae.it/meteozen/rt_data/lastdata/-/1158841,4438103/simnbo/254,0,0/1,-,-,-/B13215"
     meteo_url = "https://api.open-meteo.com/v1/forecast?latitude=44.39&longitude=11.58&hourly=precipitation&past_days=1"
-    
     try:
         res_idro = requests.get(idro_url).json()
-        livello_live = float(res_idro['value'])
+        livello = float(res_idro['value'])
         res_meteo = requests.get(meteo_url).json()
-        pioggia_24h = sum(res_meteo['hourly']['precipitation'][:24])
-        return livello_live, round(pioggia_24h, 1)
+        pioggia = round(sum(res_meteo['hourly']['precipitation'][:24]), 1)
+        return livello, pioggia
     except Exception:
-        return 0.85, 45.0 
+        return 0.85, 45.0 # Valori di test se le API sono offline
 
-# --- 3. LOGICA DI SIMULAZIONE RISCHIO CALIBRATA ---
-def get_risk_status(livello):
-    # ROSSO: Oltre il limite di tenuta testato a Dicembre 2025
-    if livello > 1.75:
-        return "🔴 RISCHIO ALTO: SUPERATA SOGLIA DICEMBRE 2025", "error"
-    # GIALLO: Zona critica tra l'esondazione 2024 e la tenuta 2025
-    elif livello >= 1.45:
-        return "🟡 RISCHIO MEDIO: AREA TEST TENUTA (Scenario Dicembre 2025)", "warning"
-    # VERDE: Sotto il livello di esondazione storica di Ottobre 2024
-    else:
-        return "🟢 RISCHIO BASSO: SITUAZIONE ORDINARIA", "success"
-
-# --- 4. UI ---
-st.set_page_config(page_title="Sillaro Sentinel LIVE", layout="wide")
-st.title("🌊 Sillaro Real-Time Sentinel")
+# --- 3. CONFIGURAZIONE PAGINA E STATUS ---
+st.set_page_config(page_title="Sillaro Sentinel Mobile", layout="wide")
+st.subheader("🌊 Monitoraggio Sillaro - Castel S. Pietro")
 
 livello_att, pioggia_att = fetch_realtime_data()
 
-# VISUALIZZAZIONE RISCHIO IN ALTO
-stato_testo, stato_tipo = get_risk_status(livello_att)
-if stato_tipo == "error":
-    st.error(f"### {stato_testo}")
-elif stato_tipo == "warning":
-    st.warning(f"### {stato_testo}")
+# Box Rischio Dinamico (Colori Soft)
+if livello_att > 1.75:
+    st.error(f"## 🚩 ALTO RISCHIO: {livello_att}m")
+    st.caption("Superata la soglia massima di tenuta storica.")
+elif livello_att >= 1.45:
+    st.warning(f"## ⚠️ ALLERTA GIALLA: {livello_att}m")
+    st.caption("Zona di attenzione: tra soglia Ottobre 2024 e Dicembre 2025.")
 else:
-    st.success(f"### {stato_testo}")
+    st.success(f"## ✅ ORDINARIO: {livello_att}m")
 
-# Metriche
-m1, m2 = st.columns(2)
-m1.metric("Livello LIVE (m)", f"{livello_att}")
-m2.metric("Pioggia 24h (mm)", f"{pioggia_att}")
-
-if st.button('🔄 AGGIORNA DATI', use_container_width=True):
+if st.button('🔄 AGGIORNA DATI LIVE', use_container_width=True):
     st.rerun()
 
 st.divider()
 
-# --- 5. GRAFICO SCATTER ---
-df_plot = df_storico.copy()
-nuovo_punto = pd.DataFrame({
-    'Evento': ['ORA'], 'Pioggia_mm': [pioggia_att], 
-    'Livello_m': [livello_att], 'Esito': ['ATTUALE']
-})
-df_combined = pd.concat([df_plot, nuovo_punto], ignore_index=True)
+# --- 4. GRAFICO COMBO LIVELLO (BARRE) + PIOGGIA (ROMBI) ---
+labels = ['<b>OGGI (Live)</b>'] + df_storico['Evento'].tolist()
+livelli = [livello_att] + df_storico['Livello_m'].tolist()
+piogge = [pioggia_att] + df_storico['Pioggia_mm'].tolist()
 
-fig = px.scatter(
-    df_combined, x="Pioggia_mm", y="Livello_m", text="Evento", color="Esito",
-    size=[15, 15, 15, 15, 15, 30],
-    color_discrete_map={'Allagamento': 'red', 'Tenuta': 'green', 'ATTUALE': 'black'}
-)
+# Palette colori pastello
+color_map = {'Allagamento': '#e5908e', 'Tenuta': '#a3c5a5', 'ATTUALE': '#bdc3c7'}
+colors = [color_map['ATTUALE']] + [color_map['Allagamento'] if x == 'Allagamento' else color_map['Tenuta'] for x in df_storico['Esito']]
 
-fig.update_traces(textposition='top center', textfont=dict(size=14, family="Arial Black"))
+fig = go.Figure()
+
+# BARRE: Livello Idrometrico (Metri)
+fig.add_trace(go.Bar(
+    y=labels, 
+    x=livelli,
+    name='Livello (m)',
+    orientation='h',
+    marker_color=colors,
+    text=[f"<b>{v}m</b>" for v in livelli],
+    textposition='inside',
+    insidetextanchor='end',
+    width=0.6
+))
+
+# ROMBI: Pioggia Cumulata (mm) su asse superiore
+fig.add_trace(go.Scatter(
+    y=labels, 
+    x=piogge,
+    name='Pioggia (mm)',
+    mode='markers+text',
+    xaxis='x2', # Collegato all'asse X secondario (in alto)
+    marker=dict(symbol='diamond', size=12, color='#5dade2'),
+    text=[f" {p}mm" for p in piogge],
+    textposition='middle right',
+    textfont=dict(color='#2e86c1', size=11)
+))
+
+# --- CONFIGURAZIONE LAYOUT (Corretta per Plotly 2026 / Python 3.13) ---
 fig.update_layout(
-    xaxis=dict(title=dict(text="Pioggia Cumulata (mm)", font=dict(size=18))),
-    yaxis=dict(title=dict(text="Livello Sillaro CSP (m)", font=dict(size=18))),
-    template="plotly_white", height=600,
-    legend=dict(font=dict(size=16), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    margin=dict(l=10, r=80, t=60, b=20),
+    height=600,
+    plot_bgcolor='white',
+    # Asse X1 (Metri - In Basso)
+    xaxis=dict(
+        title=dict(text="Livello Idrometrico (m)", font=dict(size=13)),
+        range=[0, 2.5], 
+        side='bottom',
+        gridcolor='#f5f5f5'
+    ),
+    # Asse X2 (Pioggia - In Alto)
+    xaxis2=dict(
+        title=dict(
+            text="Pioggia Cumulata 24h (mm)",
+            font=dict(size=13, color='#5dade2')
+        ),
+        range=[0, 300], 
+        overlaying='x', 
+        side='top',
+        showgrid=False,
+        tickfont=dict(color='#5dade2')
+    ),
+    yaxis=dict(
+        autorange="reversed", # Ordine cronologico dall'alto (più recente)
+        tickfont=dict(size=13)
+    ),
+    showlegend=False
 )
 
-st.plotly_chart(fig, use_container_width=True)
+# Linee di soglia verticali discrete
+fig.add_vline(x=1.45, line_dash="dot", line_color="#d35400", opacity=0.4)
+fig.add_vline(x=1.75, line_dash="dot", line_color="#c0392b", opacity=0.4)
+
+st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+# Footer con orario
+st.caption(f"Ultima lettura sensore Arpae: {datetime.now().strftime('%H:%M')}")
